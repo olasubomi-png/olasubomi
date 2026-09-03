@@ -1,4 +1,3 @@
-// dikabot.js - Command router
 const config = require('./config');
 const virtexModules = require('./lib/virtex');
 
@@ -8,6 +7,8 @@ module.exports = async (sock, msg) => {
     const sender = msg.key.participant || from;
     const isOwner = sender === config.ownerNumber + '@s.whatsapp.net';
 
+    console.log(`📩 Received from ${sender}: ${text}`);
+
     if (!text) return;
 
     const parts = text.trim().split(/\s+/);
@@ -15,11 +16,10 @@ module.exports = async (sock, msg) => {
     const args = parts.slice(1);
 
     // --- Virtex commands (e.g., .spam, .crash, .bug) ---
-    // We check if there's a virtex module with the command name (without the dot)
     const virtexName = command.startsWith('.') ? command.slice(1) : null;
 
     if (virtexName && virtexModules[virtexName]) {
-        // Execute the virtex module
+        console.log(`⚡ Executing virtex command: ${virtexName}`);
         try {
             await virtexModules[virtexName](sock, msg, args);
         } catch (err) {
@@ -29,7 +29,7 @@ module.exports = async (sock, msg) => {
         return;
     }
 
-    // --- Other commands (menu, etc.) ---
+    // --- Other commands ---
     switch (command) {
         case 'menu':
             await sock.sendMessage(from, { text: `

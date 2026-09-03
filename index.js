@@ -16,6 +16,7 @@ let reconnectTimer = null;
 let pairingTimer = null;
 let isConnecting = false;
 let pairingRequested = false;
+let welcomeSent = false;  // 👈 prevent multiple welcome messages
 
 const logger = Pino({
     level: 'silent',
@@ -246,7 +247,9 @@ async function connectToWhatsApp() {
                     );
                     console.log('');
 
-                    if (config.ownerNumber) {
+                    // 👇 Send welcome message ONLY ONCE
+                    if (!welcomeSent && config.ownerNumber) {
+                        welcomeSent = true;
                         try {
                             const ownerNumber =
                                 String(config.ownerNumber)
@@ -292,6 +295,7 @@ async function connectToWhatsApp() {
                         reason === DisconnectReason.loggedOut
                     ) {
                         pairingRequested = false;
+                        welcomeSent = false; // reset on logout
 
                         console.log('');
                         console.log(
@@ -328,7 +332,7 @@ async function connectToWhatsApp() {
         );
 
         // ============================================================
-        // NEW MESSAGE HANDLER – uses dikabot.js router
+        // MESSAGE HANDLER – uses dikabot.js router
         // ============================================================
         sock.ev.on('messages.upsert', async ({ messages }) => {
             try {
