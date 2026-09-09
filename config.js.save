@@ -1,0 +1,10 @@
+require('dotenv').config();
+
+module.exports = {
+    botNumber: process.env.BOT_NUMBER,
+    ownerNumber: process.env.OWNER_NUMBER,
+    botName: process.env.BOT_NAME || '『𝑶𝑳𝑨𝑺𝑼𝑩𝑶𝑴𝑰』',
+    ownerName: process.env.OWNER_NAME || 'Olasubomi',
+    packname: process.env.PACKNAME ||miSticker',
+    author: process.env.AUTHOR || '𝑶𝑳𝑨𝑺𝑼𝑩𝑶𝑴𝑰'
+};

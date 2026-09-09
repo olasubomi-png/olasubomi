@@ -8,19 +8,18 @@ const {
 const { Boom } = require('@hapi/boom');
 const Pino = require('pino');
 const config = require('./config');
+const { smsg } = require('./lib/place');
 
-const AUTH_DIR = 'auth_info_baileys';
+const AUTH_DIR = './session';
 
 let sock = null;
 let reconnectTimer = null;
 let pairingTimer = null;
 let isConnecting = false;
 let pairingRequested = false;
-let welcomeSent = false;  // 👈 prevent multiple welcome messages
+let welcomeSent = false;
 
-const logger = Pino({
-    level: 'silent',
-});
+const logger = Pino({ level: 'silent' });
 
 function getDisconnectReason(lastDisconnect) {
     try {
@@ -35,7 +34,6 @@ function clearTimers() {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
     }
-
     if (pairingTimer) {
         clearTimeout(pairingTimer);
         pairingTimer = null;
@@ -44,12 +42,9 @@ function clearTimers() {
 
 function scheduleReconnect(delay = 5000) {
     if (reconnectTimer) return;
-
     console.log(`🔄 Reconnecting in ${delay / 1000}s...`);
-
     reconnectTimer = setTimeout(async () => {
         reconnectTimer = null;
-
         try {
             await connectToWhatsApp();
         } catch (error) {
@@ -61,84 +56,42 @@ function scheduleReconnect(delay = 5000) {
 
 async function requestPairingCode() {
     if (!sock) return;
-
     if (sock.authState?.creds?.registered) {
         console.log('✅ WhatsApp is already registered.');
         return;
     }
-
-    if (pairingRequested) {
-        return;
-    }
-
+    if (pairingRequested) return;
     pairingRequested = true;
 
     try {
         console.log('📱 Requesting WhatsApp pairing code...');
-
-        const phoneNumber = String(config.botNumber)
-            .replace(/\D/g, '');
-
-        if (!phoneNumber) {
-            throw new Error(
-                'config.botNumber is missing or invalid.'
-            );
-        }
-
+        const phoneNumber = String(config.botNumber).replace(/\D/g, '');
+        if (!phoneNumber) throw new Error('config.botNumber is missing or invalid.');
         const code = await sock.requestPairingCode(phoneNumber);
-
         console.log('');
         console.log('======================================');
         console.log(`🔢 PAIRING CODE: ${code}`);
         console.log('======================================');
-        console.log(
-            '📲 WhatsApp → Linked Devices → Link a Device'
-        );
+        console.log('📲 WhatsApp → Linked Devices → Link a Device');
         console.log('👉 Enter the code above.');
         console.log('');
-
         pairingTimer = setTimeout(() => {
             pairingTimer = null;
-
-            if (
-                sock &&
-                sock.authState &&
-                !sock.authState.creds.registered
-            ) {
+            if (sock && sock.authState && !sock.authState.creds.registered) {
                 pairingRequested = false;
-                console.log(
-                    '⏰ Pairing code expired. Requesting another code...'
-                );
-
+                console.log('⏰ Pairing code expired. Requesting another code...');
                 requestPairingCode().catch((error) => {
-                    console.error(
-                        '❌ Pairing retry failed:',
-                        error.message
-                    );
+                    console.error('❌ Pairing retry failed:', error.message);
                 });
             }
         }, 60000);
-
     } catch (error) {
         pairingRequested = false;
-
-        console.error(
-            '❌ Pairing code request failed:',
-            error?.message || error
-        );
-
+        console.error('❌ Pairing code request failed:', error?.message || error);
         setTimeout(() => {
-            if (
-                sock &&
-                sock.authState &&
-                !sock.authState.creds.registered &&
-                !pairingRequested
-            ) {
+            if (sock && sock.authState && !sock.authState.creds.registered && !pairingRequested) {
                 requestPairingCode().catch((err) => {
-                    console.error(
-                        '❌ Pairing retry error:',
-                        err.message
-                    );
+                    console.error('❌ Pairing retry error:', err.message);
                 });
             }
         }, 10000);
@@ -150,35 +103,19 @@ async function connectToWhatsApp() {
         console.log('⚠️ Connection attempt already running.');
         return;
     }
-
     isConnecting = true;
-
     clearTimers();
 
     try {
-        const { state, saveCreds } =
-            await useMultiFileAuthState(AUTH_DIR);
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
         let version;
-
         try {
             const latest = await fetchLatestWaWebVersion();
-
             version = latest.version;
-
-            console.log(
-                `🌐 WhatsApp Web version: ${version.join('.')}`
-            );
-
+            console.log(`🌐 WhatsApp Web version: ${version.join('.')}`);
         } catch (error) {
-            console.warn(
-                '⚠️ Could not fetch latest WhatsApp Web version.'
-            );
-
-            console.warn(
-                '⚠️ Falling back to Baileys default version.'
-            );
-
+            console.warn('⚠️ Could not fetch latest WhatsApp Web version. Falling back to default.');
             version = undefined;
         }
 
@@ -186,203 +123,113 @@ async function connectToWhatsApp() {
 
         const socketConfig = {
             auth: state,
-
             logger,
-
             browser: ['Ubuntu', 'Chrome', '120.0.0'],
-
             markOnlineOnConnect: false,
-
             printQRInTerminal: false,
-
             connectTimeoutMs: 60000,
-
             keepAliveIntervalMs: 30000,
-
             syncFullHistory: false,
-
             generateHighQualityLinkPreview: false,
         };
-
-        if (version) {
-            socketConfig.version = version;
-        }
+        if (version) socketConfig.version = version;
 
         sock = makeWASocket(socketConfig);
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on(
-            'connection.update',
-            async (update) => {
-                const {
-                    connection,
-                    lastDisconnect,
-                    qr,
-                } = update;
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            console.log('📡 Connection:', connection || 'update');
 
-                console.log(
-                    '📡 Connection:',
-                    connection || 'update'
-                );
+            if (qr) {
+                console.log('📱 QR received (ignoring, using pairing).');
+            }
 
-                if (qr) {
-                    console.log(
-                        '📱 QR received.'
-                    );
+            if (connection === 'open') {
+                clearTimers();
+                pairingRequested = false;
+                console.log('');
+                console.log(`✅ ${config.botName} is ONLINE!`);
+                console.log('');
 
-                    console.log(
-                        '⚠️ Pairing-code mode is being used.'
-                    );
-                }
-
-                if (connection === 'open') {
-                    clearTimers();
-
-                    pairingRequested = false;
-
-                    console.log('');
-                    console.log(
-                        `✅ ${config.botName} is ONLINE!`
-                    );
-                    console.log('');
-
-                    // 👇 Send welcome message ONLY ONCE
-                    if (!welcomeSent && config.ownerNumber) {
-                        welcomeSent = true;
-                        try {
-                            const ownerNumber =
-                                String(config.ownerNumber)
-                                    .replace(/\D/g, '');
-
-                            const ownerJid =
-                                `${ownerNumber}@s.whatsapp.net`;
-
-                            await sock.sendMessage(
-                                ownerJid,
-                                {
-                                    text:
-                                        `🚀 ${config.botName} is online!`,
-                                }
-                            );
-
-                            console.log(
-                                '📨 Online notification sent.'
-                            );
-
-                        } catch (error) {
-                            console.error(
-                                '⚠️ Could not send online notification:',
-                                error.message
-                            );
-                        }
+                if (!welcomeSent && config.ownerNumber) {
+                    welcomeSent = true;
+                    try {
+                        const ownerNumber = String(config.ownerNumber).replace(/\D/g, '');
+                        const ownerJid = `${ownerNumber}@s.whatsapp.net`;
+                        await sock.sendMessage(ownerJid, {
+                            text: `🚀 ${config.botName} is online!`,
+                        });
+                        console.log('📨 Online notification sent.');
+                    } catch (error) {
+                        console.error('⚠️ Could not send online notification:', error.message);
                     }
+                }
+                return;
+            }
 
+            if (connection === 'close') {
+                clearTimers();
+                const reason = getDisconnectReason(lastDisconnect);
+                console.log(`❌ Connection closed. Reason: ${reason}`);
+
+                if (reason === DisconnectReason.loggedOut) {
+                    pairingRequested = false;
+                    welcomeSent = false;
+                    console.log('');
+                    console.log('🚫 WhatsApp session logged out.');
+                    console.log('👉 Delete session folder and pair again.');
+                    console.log('');
                     return;
                 }
 
-                if (connection === 'close') {
-                    clearTimers();
-
-                    const reason =
-                        getDisconnectReason(lastDisconnect);
-
-                    console.log(
-                        `❌ Connection closed. Reason: ${reason}`
-                    );
-
-                    if (
-                        reason === DisconnectReason.loggedOut
-                    ) {
-                        pairingRequested = false;
-                        welcomeSent = false; // reset on logout
-
-                        console.log('');
-                        console.log(
-                            '🚫 WhatsApp session logged out.'
-                        );
-                        console.log(
-                            '👉 Delete auth_info_baileys and pair again.'
-                        );
-                        console.log('');
-
-                        return;
-                    }
-
-                    if (reason === 405) {
-                        console.log(
-                            '⚠️ WhatsApp returned HTTP 405.'
-                        );
-                        console.log(
-                            '⚠️ This can indicate a rejected/stale WhatsApp Web version.'
-                        );
-                    }
-
-                    if (
-                        reason === DisconnectReason.badSession
-                    ) {
-                        console.log(
-                            '⚠️ Bad session detected.'
-                        );
-                    }
-
-                    scheduleReconnect(5000);
+                if (reason === 405) {
+                    console.log('⚠️ WhatsApp returned HTTP 405 – maybe stale version.');
                 }
+                if (reason === DisconnectReason.badSession) {
+                    console.log('⚠️ Bad session detected.');
+                }
+                scheduleReconnect(5000);
             }
-        );
+        });
 
-        // ============================================================
-        // MESSAGE HANDLER – uses dikabot.js router
-        // ============================================================
+        // Message handler – uses smsg and dikabot
         sock.ev.on('messages.upsert', async ({ messages }) => {
             try {
                 const msg = messages?.[0];
                 if (!msg) return;
                 if (!msg.message) return;
-                if (msg.key?.fromMe) return;
+                if (msg.key?.fromMe) return; // ignore own messages
 
-                // Pass to the router
-                require('./dikabot')(sock, msg);
+                // Normalize message with smsg
+                const fullMsg = await smsg(sock, msg);
+                // Pass to router
+                require('./dikabot')(sock, fullMsg);
             } catch (error) {
                 console.error('❌ Message handler error:', error.message);
             }
         });
 
+        // Request pairing if not registered
         if (!state.creds.registered) {
             setTimeout(() => {
-                if (
-                    sock &&
-                    !sock.authState?.creds?.registered &&
-                    !pairingRequested
-                ) {
-                    requestPairingCode().catch(
-                        (error) => {
-                            console.error(
-                                '❌ Pairing request error:',
-                                error.message
-                            );
-                        }
-                    );
+                if (sock && !sock.authState?.creds?.registered && !pairingRequested) {
+                    requestPairingCode().catch((error) => {
+                        console.error('❌ Pairing request error:', error.message);
+                    });
                 }
             }, 5000);
         }
 
-        console.log(
-            '🚀 WhatsApp socket initialized.'
-        );
+        console.log('🚀 WhatsApp socket initialized.');
 
     } catch (error) {
         console.error('');
-        console.error(
-            '❌ WhatsApp connection setup failed:'
-        );
-        console.error(
-            error?.stack || error?.message || error
-        );
+        console.error('❌ WhatsApp connection setup failed:');
+        console.error(error?.stack || error?.message || error);
         console.error('');
-
         scheduleReconnect(10000);
-
     } finally {
         isConnecting = false;
     }
@@ -390,32 +237,17 @@ async function connectToWhatsApp() {
 
 async function shutdown(signal) {
     console.log(`\n🛑 Received ${signal}. Shutting down...`);
-
     clearTimers();
-
     try {
-        if (sock) {
-            sock.end(undefined);
-        }
+        if (sock) sock.end(undefined);
     } catch (error) {
-        console.error(
-            'Shutdown error:',
-            error.message
-        );
+        console.error('Shutdown error:', error.message);
     }
-
     process.exit(0);
 }
 
-process.on(
-    'SIGINT',
-    () => shutdown('SIGINT')
-);
-
-process.on(
-    'SIGTERM',
-    () => shutdown('SIGTERM')
-);
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 console.log('');
 console.log('======================================');
@@ -425,8 +257,5 @@ console.log('======================================');
 console.log('');
 
 connectToWhatsApp().catch((error) => {
-    console.error(
-        '❌ Fatal startup error:',
-        error
-    );
+    console.error('❌ Fatal startup error:', error);
 });
