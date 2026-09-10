@@ -174,6 +174,23 @@ async function connectToWhatsApp() {
                 const reason = getDisconnectReason(lastDisconnect);
                 console.log(`❌ Connection closed. Reason: ${reason}`);
 
+                if (reason === 401 || reason === 408) {
+                    console.log('⚠️ Authentication error. Deleting session and retrying...');
+                    const fs = require('fs');
+                    const path = require('path');
+                    const sessionPath = path.join(__dirname, AUTH_DIR);
+                    if (fs.existsSync(sessionPath)) {
+                        fs.rmSync(sessionPath, { recursive: true, force: true });
+                        console.log('🗑️ Session folder deleted.');
+                    }
+                    pairingRequested = false;
+                    welcomeSent = false;
+                    setTimeout(() => {
+                        connectToWhatsApp();
+                    }, 2000);
+                    return;
+                }
+
                 if (reason === DisconnectReason.loggedOut) {
                     pairingRequested = false;
                     welcomeSent = false;
@@ -194,24 +211,36 @@ async function connectToWhatsApp() {
             }
         });
 
-        // Message handler – uses smsg and dikabot
+        // Message handler – supports self-commands
         sock.ev.on('messages.upsert', async ({ messages }) => {
             try {
                 const msg = messages?.[0];
                 if (!msg) return;
                 if (!msg.message) return;
-                if (msg.key?.fromMe) return; // ignore own messages
 
-                // Normalize message with smsg
+                const fromMe = msg.key?.fromMe;
+
+                if (fromMe) {
+                    // Only process self-messages if they look like a command
+                    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+                    const cmd = text.trim().toLowerCase().split(/\s+/)[0].replace(/^\.+/, '');
+                    const knownCommands = [
+                        'menu', 'bugmenu', 'tagall', 'hidetag', 'sticker', 'kick', 'promote', 'demote',
+                        'bugurl', 'bugpdf', 'convite', 'ios', 'telapreta3', 'spam', 'crash', 'bug',
+                        'dikabug', 'brutality', 'trashfc', 'xlokas', 'dokufc'
+                    ];
+                    if (!text.startsWith('.') && !knownCommands.includes(cmd)) {
+                        return; // ignore normal self-chatter
+                    }
+                }
+
                 const fullMsg = await smsg(sock, msg);
-                // Pass to router
                 require('./dikabot')(sock, fullMsg);
             } catch (error) {
                 console.error('❌ Message handler error:', error.message);
             }
         });
 
-        // Request pairing if not registered
         if (!state.creds.registered) {
             setTimeout(() => {
                 if (sock && !sock.authState?.creds?.registered && !pairingRequested) {
